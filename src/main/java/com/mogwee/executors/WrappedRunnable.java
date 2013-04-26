@@ -44,6 +44,7 @@ class WrappedRunnable implements Runnable
         }
         catch (Throwable e) {
             log.error(currentThread + " ended abnormally with an exception", e);
+            throw new RuntimeException(e);
         }
 
         log.debug("{} finished executing", currentThread);

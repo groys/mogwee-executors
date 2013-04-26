@@ -30,6 +30,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
@@ -73,8 +74,13 @@ public class TestExecutors
                 throw new RuntimeException("Fail!");
             }
         });
+        try
+        {
+            future.get();
+            Assert.fail("Expected ExecutionException");
+        }   catch (ExecutionException e) {
+        }
 
-        Assert.assertNull(future.get());
         future = executorService.submit(new Runnable()
         {
             @Override
@@ -129,7 +135,6 @@ public class TestExecutors
         String actual = bos.toString();
 
         assertPattern(actual, Pattern.compile("^ERROR - Thread\\[TestLoggingExecutor-[^\\]]+\\] ended abnormally with an exception\njava.lang.OutOfMemoryError: Poof!\n"));
-        assertPattern(actual, Pattern.compile("DEBUG - Thread\\[TestLoggingExecutor-[^\\]]+\\] finished executing$"));
     }
 
     private void callableTest(ExecutorService executorService) throws Exception
@@ -184,7 +189,7 @@ public class TestExecutors
         assertPattern(actual, Pattern.compile("DEBUG - Thread\\[TestLoggingExecutor-[^\\]]+\\] finished executing$"));
     }
 
-    private void scheduledTest(ScheduledExecutorService executorService) throws Exception
+    private void scheduleTestCallable(ScheduledExecutorService executorService) throws Exception
     {
         Logger loggingLogger = Logger.getLogger(LoggingExecutor.class);
         Logger failsafeLogger = Logger.getLogger(FailsafeScheduledExecutor.class);
@@ -192,10 +197,6 @@ public class TestExecutors
         WriterAppender dummyAppender = new WriterAppender(new SimpleLayout(), bos);
 
         registerAppenders(loggingLogger, failsafeLogger, dummyAppender);
-
-        final CountDownLatch scheduleLatch = new CountDownLatch(1);
-        final CountDownLatch fixedDelayLatch = new CountDownLatch(2);
-        final CountDownLatch fixedRateLatch = new CountDownLatch(2);
         Future<?> future = executorService.schedule(new Callable<Void>()
         {
             @Override
@@ -204,49 +205,6 @@ public class TestExecutors
                 throw new Exception("Pow!");
             }
         }, 1, TimeUnit.MILLISECONDS);
-
-        executorService.schedule(new Runnable()
-        {
-            @Override
-            public void run()
-            {
-                scheduleLatch.countDown();
-
-                throw new RuntimeException("D'oh!");
-            }
-        }, 1, TimeUnit.MILLISECONDS);
-        executorService.scheduleWithFixedDelay(new Runnable()
-        {
-            @Override
-            public void run()
-            {
-                fixedDelayLatch.countDown();
-
-                if (fixedDelayLatch.getCount() != 0) {
-                    throw new OutOfMemoryError("Zoinks!");
-                }
-                else {
-                    throw new RuntimeException("Eep!");
-                }
-            }
-        }, 1, 1, TimeUnit.MILLISECONDS);
-        executorService.scheduleAtFixedRate(new Runnable()
-        {
-            @Override
-            public void run()
-            {
-                fixedRateLatch.countDown();
-
-                if (fixedRateLatch.getCount() != 0) {
-                    throw new OutOfMemoryError("Zounds!");
-                }
-                else {
-                    throw new RuntimeException("Egad!");
-                }
-            }
-        }, 1, 1, TimeUnit.MILLISECONDS);
-
-
         try {
             future.get();
             Assert.fail("Expected exception");
@@ -254,20 +212,103 @@ public class TestExecutors
         catch (ExecutionException e) {
             Assert.assertEquals(e.getCause().toString(), "java.lang.Exception: Pow!");
         }
+    }
+
+    private void scheduleTestScheduleRunnable(ScheduledExecutorService executorService) throws Exception
+    {
+        Logger loggingLogger = Logger.getLogger(LoggingExecutor.class);
+        Logger failsafeLogger = Logger.getLogger(FailsafeScheduledExecutor.class);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        WriterAppender dummyAppender = new WriterAppender(new SimpleLayout(), bos);
+
+        registerAppenders(loggingLogger, failsafeLogger, dummyAppender);
+        final CountDownLatch scheduleLatch = new CountDownLatch(1);
+
+        ScheduledFuture<?> scheduledFuture1 = executorService.schedule(
+          new Runnable() {
+            @Override
+            public void run() {
+              scheduleLatch.countDown();
+
+              throw new RuntimeException("D'oh!");
+            }
+          }, 1, TimeUnit.MILLISECONDS
+        );
 
         scheduleLatch.await();
+        try {
+            scheduledFuture1.get();
+            Assert.fail("Expected exception");
+        }
+        catch (ExecutionException e) {
+            Assert.assertEquals(
+              e.getCause().toString(),
+              "java.lang.RuntimeException: java.lang.RuntimeException: D'oh!"
+            );
+        }
+    }
+
+    private void scheduleTestscheduleWithFixedDelay(ScheduledExecutorService executorService) throws Exception
+    {
+        final Logger loggingLogger = Logger.getLogger(LoggingExecutor.class);
+        Logger failsafeLogger = Logger.getLogger(FailsafeScheduledExecutor.class);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        WriterAppender dummyAppender = new WriterAppender(new SimpleLayout(), bos);
+
+        registerAppenders(loggingLogger, failsafeLogger, dummyAppender);
+        final CountDownLatch fixedDelayLatch = new CountDownLatch(2);
+        executorService.scheduleWithFixedDelay(new Runnable()
+          {
+              @Override
+              public void run()
+              {
+                  fixedDelayLatch.countDown();
+
+                  if (fixedDelayLatch.getCount() != 0) {
+                    loggingLogger.debug("Zoinks!");
+                  }
+                  else {
+                      throw new RuntimeException("Eep!");
+                  }
+              }
+          }, 1, 1, TimeUnit.MILLISECONDS);
         fixedDelayLatch.await();
+        unregisterAppenders(executorService, loggingLogger, failsafeLogger, dummyAppender);
+
+        String actual = bos.toString();
+        assertPattern(actual, Pattern.compile("DEBUG - Zoinks!"));
+        assertPattern(actual, Pattern.compile("ERROR - Thread\\[TestLoggingExecutor-[^\\]]+\\] ended abnormally with an exception\njava.lang.RuntimeException: Eep!\n"));
+    }
+
+    private void scheduleTestscheduleAtFixedRate(ScheduledExecutorService executorService) throws Exception
+    {
+        final Logger loggingLogger = Logger.getLogger(LoggingExecutor.class);
+        Logger failsafeLogger = Logger.getLogger(FailsafeScheduledExecutor.class);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        WriterAppender dummyAppender = new WriterAppender(new SimpleLayout(), bos);
+
+        registerAppenders(loggingLogger, failsafeLogger, dummyAppender);
+        final CountDownLatch fixedRateLatch = new CountDownLatch(2);
+        executorService.scheduleAtFixedRate(
+          new Runnable() {
+            @Override
+            public void run() {
+              fixedRateLatch.countDown();
+
+              if (fixedRateLatch.getCount() != 0) {
+                loggingLogger.debug("Zounds!");
+              } else {
+                throw new RuntimeException("Egad!");
+              }
+            }
+          }, 1, 1, TimeUnit.MILLISECONDS
+        );
         fixedRateLatch.await();
         unregisterAppenders(executorService, loggingLogger, failsafeLogger, dummyAppender);
 
         String actual = bos.toString();
-
-        assertPattern(actual, Pattern.compile("ERROR - Thread\\[TestLoggingExecutor-[^\\]]+\\] ended abnormally with an exception\njava.lang.RuntimeException: D'oh!\n"));
-        assertPattern(actual, Pattern.compile("ERROR - Thread\\[TestLoggingExecutor-[^\\]]+\\] ended abnormally with an exception\njava.lang.OutOfMemoryError: Zoinks!\n"));
-        assertPattern(actual, Pattern.compile("ERROR - Thread\\[TestLoggingExecutor-[^\\]]+\\] ended abnormally with an exception\njava.lang.RuntimeException: Eep!\n"));
-        assertPattern(actual, Pattern.compile("ERROR - Thread\\[TestLoggingExecutor-[^\\]]+\\] ended abnormally with an exception\njava.lang.OutOfMemoryError: Zounds!\n"));
+        assertPattern(actual, Pattern.compile("DEBUG - Zounds!"));
         assertPattern(actual, Pattern.compile("ERROR - Thread\\[TestLoggingExecutor-[^\\]]+\\] ended abnormally with an exception\njava.lang.RuntimeException: Egad!\n"));
-        assertPattern(actual, Pattern.compile("DEBUG - Thread\\[TestLoggingExecutor-[^\\]]+\\] finished executing$"));
     }
 
     private void assertPattern(String actual, Pattern expected)
@@ -355,7 +396,10 @@ public class TestExecutors
     @Test(groups = "fast")
     public void testScheduledThreadPoolScheduled() throws Exception
     {
-        scheduledTest(Executors.newScheduledThreadPool(10, "TestLoggingExecutor"));
+      scheduleTestCallable(Executors.newScheduledThreadPool(10, "TestLoggingExecutor"));
+      scheduleTestScheduleRunnable(Executors.newScheduledThreadPool(10, "TestLoggingExecutor"));
+      scheduleTestscheduleWithFixedDelay(Executors.newScheduledThreadPool(10, "TestLoggingExecutor"));
+      scheduleTestscheduleAtFixedRate(Executors.newScheduledThreadPool(10, "TestLoggingExecutor"));
     }
 
     @Test(groups = "fast")
@@ -379,6 +423,9 @@ public class TestExecutors
     @Test(groups = "fast")
     public void testSingleThreadScheduledExecutorScheduled() throws Exception
     {
-        scheduledTest(Executors.newSingleThreadScheduledExecutor("TestLoggingExecutor"));
+      scheduleTestCallable(Executors.newSingleThreadScheduledExecutor("TestLoggingExecutor"));
+      scheduleTestScheduleRunnable(Executors.newSingleThreadScheduledExecutor("TestLoggingExecutor"));
+      scheduleTestscheduleWithFixedDelay(Executors.newSingleThreadScheduledExecutor( "TestLoggingExecutor"));
+      scheduleTestscheduleAtFixedRate(Executors.newSingleThreadScheduledExecutor( "TestLoggingExecutor"));
     }
 }
